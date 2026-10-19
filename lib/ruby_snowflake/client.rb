@@ -19,6 +19,7 @@ rescue LoadError
   # This isn't required
 end
 
+require_relative "partition_fetch"
 require_relative "client/http_connection_wrapper"
 require_relative "client/key_pair_jwt_auth_manager"
 require_relative "client/single_thread_in_memory_strategy"
