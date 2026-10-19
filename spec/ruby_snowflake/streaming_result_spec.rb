@@ -1,17 +1,22 @@
 # frozen_string_literal: true
 
-require "rb_snowflake_client"
+require "spec_helper"
 
 RSpec.describe RubySnowflake::StreamingResult do
   let(:row_types) do
     [{"name" => "value", "type" => "text", "scale" => 0, "precision" => 0}]
   end
-  let(:thread_pool) { Concurrent::FixedThreadPool.new(1) }
+  let(:pools) { [] }
+  let(:thread_pool) { pools.first }
 
   before do
-    allow(Concurrent::FixedThreadPool).to receive(:new).with(1).and_return(thread_pool)
-    allow(thread_pool).to receive(:shutdown).and_call_original
-    allow(thread_pool).to receive(:wait_for_termination).and_call_original
+    allow(Concurrent::FixedThreadPool).to receive(:new).and_wrap_original do |original, *args, **opts|
+      original.call(*args, **opts).tap do |pool|
+        allow(pool).to receive(:shutdown).and_call_original
+        allow(pool).to receive(:wait_for_termination).and_call_original
+        pools << pool
+      end
+    end
   end
 
   def build_result(&retrieve_proc)
@@ -44,12 +49,26 @@ RSpec.describe RubySnowflake::StreamingResult do
     expect(thread_pool).to have_received(:wait_for_termination)
   end
 
-  it "propagates prefetch failures and shuts down the pool" do
+  it "propagates prefetch failures as RubySnowflake::Error and shuts down the pool" do
     expect do
       build_result { raise "partition failed" }.to_a
-    end.to raise_error("partition failed")
+    end.to raise_error(RubySnowflake::Error, /RuntimeError: partition failed/) { |error|
+      expect(error.cause).to be_a(RuntimeError)
+    }
 
     expect(thread_pool).to have_received(:shutdown)
     expect(thread_pool).to have_received(:wait_for_termination)
+  end
+
+  it "re-raises RubySnowflake errors from prefetches unchanged" do
+    expect do
+      build_result { raise RubySnowflake::BadResponseError, "500 from Snowflake" }.to_a
+    end.to raise_error(RubySnowflake::BadResponseError, "500 from Snowflake")
+  end
+
+  it "wraps connection pool timeouts in ConnectionStarvedError" do
+    expect do
+      build_result { raise ConnectionPool::TimeoutError, "waited 60 sec" }.to_a
+    end.to raise_error(RubySnowflake::ConnectionStarvedError, /Rejection reason: waited 60 sec/)
   end
 end
