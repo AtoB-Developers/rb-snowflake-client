@@ -14,7 +14,9 @@ module RubySnowflake
     def each
       return to_enum(:each) unless block_given?
 
-      thread_pool = Concurrent::FixedThreadPool.new 1
+      raise "streaming result is already being iterated" if @thread_pool
+
+      thread_pool = @thread_pool = Concurrent::FixedThreadPool.new 1
 
       begin
         data.each_with_index do |_partition, index|
@@ -43,9 +45,17 @@ module RubySnowflake
           data[index] = :finished
         end
       ensure
+        @thread_pool = nil
         thread_pool.shutdown
         thread_pool.wait_for_termination
       end
+    end
+
+    def close
+      return unless @thread_pool
+
+      @thread_pool.shutdown
+      @thread_pool.wait_for_termination
     end
 
 
