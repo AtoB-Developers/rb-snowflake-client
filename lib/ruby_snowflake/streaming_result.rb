@@ -45,16 +45,17 @@ module RubySnowflake
           data[index] = :finished
         end
       ensure
-        close
+        @thread_pool = nil
+        thread_pool.shutdown
+        thread_pool.wait_for_termination
       end
     end
 
     def close
-      thread_pool, @thread_pool = @thread_pool, nil
-      return unless thread_pool
+      return unless @thread_pool
 
-      thread_pool.shutdown
-      thread_pool.wait_for_termination
+      @thread_pool.shutdown
+      @thread_pool.wait_for_termination
     end
 
 
