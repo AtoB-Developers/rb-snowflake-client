@@ -14,13 +14,15 @@ module RubySnowflake
     def each
       return to_enum(:each) unless block_given?
 
-      @thread_pool = Concurrent::FixedThreadPool.new 1
+      raise "streaming result is already being iterated" if @thread_pool
+
+      thread_pool = @thread_pool = Concurrent::FixedThreadPool.new 1
 
       begin
         data.each_with_index do |_partition, index|
           next_index = [index+1, data.size-1].min
           if data[next_index].nil? # prefetch
-            data[next_index] = Concurrent::Future.execute(executor: @thread_pool) do
+            data[next_index] = Concurrent::Future.execute(executor: thread_pool) do
               @retreive_proc.call(next_index)
             end
           end
