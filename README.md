@@ -101,6 +101,17 @@ result.each do |row|
 end
 ```
 
+`each` shuts down the prefetch thread when iteration ends, breaks, or raises. If you iterate externally, for example with `Enumerator#next` or a library that pulls rows from an enumerator, and stop before the end, call `close` to shut it down.
+
+```ruby
+rows = result.to_enum(:each)
+begin
+  rows.next
+ensure
+  result.close
+end
+```
+
 ## Switching databases
 
 You can also overwrite the database specified in the initializer, and run your query with a different context.
