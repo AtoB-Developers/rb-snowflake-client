@@ -160,6 +160,62 @@ RSpec.describe RubySnowflake::Client do
       end
     end
 
+    context "when Snowflake cancels the statement at its timeout" do
+      let(:query) { "SELECT 1" }
+
+      it "raises a QueryTimeoutError without resubmitting the statement" do
+        requests = 0
+        allow(Net::HTTP).to receive(:start).and_return(Net::HTTP.new("example.snowflakecomputing.com"))
+        allow_any_instance_of(Net::HTTP).to receive(:request) do
+          requests += 1
+          response = Net::HTTPRequestTimeout.new("1.1", "408", "Request Timeout")
+          allow(response).to receive(:body).and_return({
+            code: "000630",
+            message: "Statement reached its statement or warehouse timeout of 30 second(s) and was canceled.",
+            sqlState: "57014",
+            statementHandle: "test-handle"
+          }.to_json)
+          response
+        end
+
+        expect { client.query(query, query_timeout: 30) }.to raise_error(RubySnowflake::QueryTimeoutError, /000630/)
+        expect(requests).to eq(1)
+      end
+    end
+
+    context "when Snowflake answers with a 408 that is not a statement timeout" do
+      let(:client) { described_class.from_env(http_retries: 1) }
+      let(:query) { "SELECT 1" }
+
+      it "retries the request" do
+        requests = 0
+        allow(Net::HTTP).to receive(:start).and_return(Net::HTTP.new("example.snowflakecomputing.com"))
+        allow_any_instance_of(Net::HTTP).to receive(:request) do
+          requests += 1
+          response = Net::HTTPRequestTimeout.new("1.1", "408", "Request Timeout")
+          allow(response).to receive(:body).and_return("Request Timeout")
+          response
+        end
+
+        expect { client.query(query) }.to raise_error(RubySnowflake::RetryableBadResponseError)
+        expect(requests).to eq(2)
+      end
+    end
+
+    describe "canceling a statement" do
+      it "posts to the statement's cancel endpoint" do
+        connection = Net::HTTP.new("example.snowflakecomputing.com")
+        allow(connection).to receive(:request) do |request|
+          expect(request.method).to eq("POST")
+          expect(request.path).to eq("/api/v2/statements/test-handle/cancel")
+          Net::HTTPSuccess.new("1.1", "200", "OK")
+        end
+
+        expect(client.send(:attempt_to_cancel_and_silence_errors, connection, "test-handle")).to be(true)
+        expect(connection).to have_received(:request).once
+      end
+    end
+
     context "with parameters" do
       let(:query) { "SELECT 1" }
 

@@ -72,6 +72,8 @@ module RubySnowflake
     VALID_RESPONSE_CODES = %w(200 202).freeze
     POLLING_RESPONSE_CODE = "202"
     POLLING_INTERVAL = 2 # seconds
+    # Snowflake's error code for a statement it canceled at its statement timeout
+    STATEMENT_TIMEOUT_CODE = "000630"
 
     # can't be set after initialization
     attr_reader :connection_timeout, :max_connections, :logger, :max_threads_per_query, :thread_scale_factor, :http_retries, :query_timeout, :default_role
@@ -238,6 +240,11 @@ module RubySnowflake
       def raise_on_bad_response(response)
         return if VALID_RESPONSE_CODES.include? response.code
 
+        # Snowflake already canceled the statement at its timeout; resubmitting it would run it again
+        if statement_timeout_response?(response)
+          raise QueryTimeoutError, "Query timed out on Snowflake: #{response.body}"
+        end
+
         # there are a class of errors we want to retry rather than just giving up
         if retryable_http_response_code?(response.code)
           raise RetryableBadResponseError,
@@ -257,6 +264,12 @@ module RubySnowflake
         # anything in the 3xx range as those are mostly "redirect" responses
         [400, 403, 405, 408, 429].include?(code.to_i) || (500..599).include?(code.to_i) ||
          (300..399).include?(code.to_i)
+      end
+
+      def statement_timeout_response?(response)
+        JSON.parse(response.body)["code"] == STATEMENT_TIMEOUT_CODE
+      rescue JSON::ParserError, TypeError
+        false
       end
 
       def retryable_log_method
@@ -291,7 +304,7 @@ module RubySnowflake
 
       def attempt_to_cancel_and_silence_errors(connection, statement_handle)
         cancel_response = request_with_auth_and_headers(connection, Net::HTTP::Post,
-                                                        "/api/v2/#{statement_handle}/cancel")
+                                                        "/api/v2/statements/#{statement_handle}/cancel")
         true
       rescue Error => error
         if error.is_a?(BadResponseError) && error.message.include?("404")
